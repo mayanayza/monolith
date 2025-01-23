@@ -1,0 +1,52 @@
+project:
+  name: "monolith"
+  display_name: "🗿 Monolith"
+  date_created: "2025-01-22"
+  status: "backlog" # backlog, in progress, complete, published
+  description: "Brief project description goes here..."
+  featured_image: ""  # Just the filename, e.g. "hero.jpg"
+  tags: []
+
+physical_specifications:
+  dimensions:
+    width: ""
+    height: ""
+    depth: ""
+    unit: "cm"
+  weight:
+    value: ""
+    unit: "kg"
+  materials:
+    primary: ['Water Vapor', 'Bioplastic', '650nm Laser', 'Code', 'Circuitry']
+    secondary: []
+    consumables: []
+
+technical_requirements:
+  power: "AC Power - US, Type A, 120V"
+  space:
+    dimensions: ""
+    minimum_clearance: ""
+    preferred_layout: ""
+  lighting:
+    requirements: ""
+    preferences: "Dim lighting"
+  mounting:
+    method: "Pedestal Stand"
+    weight_capacity_needed: ""
+    special_requirements: ""
+  environmental:
+    temperature_range: ""
+    humidity_range: ""
+    ventilation_needs: ""
+
+exhibition:
+  setup:
+    time_required: "15"
+    people_required: "1"
+    tools_required: []
+    instructions: ["Fill reservoir with water using provided funnel.","Wait approximately 15 minutes to allow cotton wick to absorb water.","Plug in AC power to outlet to begin operation."]
+  maintenance:
+    frequency: "30"
+    tasks: ["Fill reservoir with water"]
+    supplies_needed: ["Funnel, Water"]
+  history: []
