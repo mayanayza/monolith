@@ -2,7 +2,8 @@ project:
   name: "monolith"
   display_name: "🗿 Monolith"
   date_created: "2025-01-22"
-  status: "in progress" # backlog, in progress, complete, published
+  status: "in_progress" # backlog, in progress, complete, published
+  priority: 0
   description: "Concepts of mulitiplicity, parts, and the artist’s experience of living with Disassociative Identity Disorder (DID)."
   featured_image: ""  # Just the filename, e.g. "hero.jpg"
   tags: ["Art", "Sculpture"]
