@@ -1,6 +1,3 @@
 # 🗿 Monolith
 
-    
-
-    ## Media
-    
+## Media
