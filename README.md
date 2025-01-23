@@ -1,3 +1,5 @@
-#🗿 Monolith
-{content}
+# 🗿 Monolith
+
+
 ## Media
+
