@@ -2,10 +2,10 @@ project:
   name: "monolith"
   display_name: "🗿 Monolith"
   date_created: "2025-01-22"
-  status: "backlog" # backlog, in progress, complete, published
-  description: "Brief project description goes here..."
+  status: "in progress" # backlog, in progress, complete, published
+  description: "Concepts of mulitiplicity, parts, and the artist’s experience of living with Disassociative Identity Disorder (DID)."
   featured_image: ""  # Just the filename, e.g. "hero.jpg"
-  tags: []
+  tags: ["Art", "Sculpture"]
 
 physical_specifications:
   dimensions:
@@ -17,23 +17,15 @@ physical_specifications:
     value: ""
     unit: "kg"
   materials:
-    primary: ['Water Vapor', 'Bioplastic', '650nm Laser', 'Code', 'Circuitry']
+    primary: ["Latex", "Acrylic", "Limestone", "Steel", "Code", "Circuitry", "Bioplastic"]
     secondary: []
     consumables: []
 
 technical_requirements:
-  power: "AC Power - US, Type A, 120V"
-  space:
-    dimensions: ""
-    minimum_clearance: ""
-    preferred_layout: ""
-  lighting:
-    requirements: ""
-    preferences: "Dim lighting"
-  mounting:
-    method: "Pedestal Stand"
-    weight_capacity_needed: ""
-    special_requirements: ""
+  power: ""
+  space: ""
+  lighting: ""
+  mounting: ""
   environmental:
     temperature_range: ""
     humidity_range: ""
@@ -41,12 +33,11 @@ technical_requirements:
 
 exhibition:
   setup:
-    time_required: "15"
-    people_required: "1"
+    time_required: ""
+    people_required: ""
     tools_required: []
-    instructions: ["Fill reservoir with water using provided funnel.","Wait approximately 15 minutes to allow cotton wick to absorb water.","Plug in AC power to outlet to begin operation."]
+    instructions: []
   maintenance:
-    frequency: "30"
-    tasks: ["Fill reservoir with water"]
-    supplies_needed: ["Funnel, Water"]
+    tasks: []
+    supplies_needed: []
   history: []
