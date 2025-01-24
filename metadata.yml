@@ -5,7 +5,12 @@ project:
   status: "in_progress" # backlog, in progress, complete, published
   priority: 0
   description: "Concepts of mulitiplicity, parts, and the artist’s experience of living with Disassociative Identity Disorder (DID)."
-  featured_image: ""  # Just the filename, e.g. "hero.jpg"
+  featured_content: 
+    type: "image"
+    source: ""  # Just the filename, e.g. "hero.jpg"
+    language: ""
+    start_line: 0
+    end_line: 10
   tags: ["Art", "Sculpture"]
 
 physical_specifications:
