@@ -4,7 +4,7 @@ project:
   date_created: "2025-01-22"
   status: "in_progress" # backlog, in progress, complete, published
   priority: 0
-  description: "Concepts of mulitiplicity, parts, and the artist’s experience of living with Disassociative Identity Disorder (DID)."
+  description: "Concepts of mulitiplicity, parts, and the experience of living with Disassociative Identity Disorder (DID)."
   featured_content: 
     type: "image"
     source: ""  # Just the filename, e.g. "hero.jpg"
