@@ -1,18 +1,7 @@
-content.md
-
-# Internal media files
 media-internal/
-
-# Node dependencies
-node_modules/
-
-# System files
+content/
+script/.env
+script/.venv/
+**/__init__.py
+**/__pycache__
 .DS_Store
-.env
-*.log
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo

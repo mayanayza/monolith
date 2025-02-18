@@ -2,6 +2,10 @@
 
 
 
+# 🗿 Monolith
+
+
+
 ## Media
 
 
@@ -14,3 +18,7 @@
 - [images](media/models/images)
 - [models](media/models/models)
 - [videos](media/models/videos)
+
+
+
+
