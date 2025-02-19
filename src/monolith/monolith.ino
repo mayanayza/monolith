@@ -8,18 +8,19 @@
 #define LED_COUNT 2
 #define MOTOR_COUNT 9
 #define MAX_MOTORS_MOVING 2
+#define PATTERN_DURATION 30000
 #define INITIAL_POSITION 4000 //where to assume the motor will be retracting from during init
 #define MAX_POSITION 2500
 #define MIN_POSITION 0
 
 //Audio playback and buffer settings
+#define SAMPLE_RATE 16000
+#define DAC_RESOLUTION 4096
+#define DAC_MIDPOINT (DAC_RESOLUTION / 2)
 #define AUDIO_MAX_VOLUME 255
 #define AUDIO_MIN_VOLUME 0
-#define FADE_DURATION 500  //total duration of volume fade
-#define BUFFER_SIZE 2600
+#define BUFFER_SIZE 2048
 #define UPDATE_INTERVAL 1  //ms between updates
-
-const float volumeStepSize = AUDIO_MAX_VOLUME / (FADE_DURATION / UPDATE_INTERVAL);
 
 // Audio buffer and timer settings
 volatile uint32_t isrCount = 0;
@@ -53,6 +54,7 @@ void setupTimer5() {
 }
 
 void setupTimer4() {
+  // Reset timer registers
   TCCR4A = 0;
   TCCR4B = 0;
   TIMSK4 = 0;
@@ -61,23 +63,23 @@ void setupTimer4() {
   // Use prescaler of 1 for maximum precision
   TCCR4B |= (1 << WGM42) | (1 << CS40);
 
+  // Calculate compare value for exact 16kHz
   // 16MHz/16kHz = 1000
-  OCR4A = 999;
+  OCR4A = (F_CPU / SAMPLE_RATE) - 1;
 
+  // Enable timer compare interrupt
   TIMSK4 |= (1 << OCIE4A);
 }
 
 ISR(TIMER4_COMPA_vect) {
-
-  if (!isPlaying) {
+  if (!isPlaying || currentBuffer == nullptr) {
     return;
   }
 
+  // Simple direct conversion
   uint8_t sample = currentBuffer[audioBufferPos++];
   nextDacValue = ((uint32_t)sample * 4095) / 255;
-
   needsDacUpdate = true;
-  isrCount++;
 }
 
 // Keep Timer5 for motor control only
@@ -92,35 +94,6 @@ ISR(TIMER5_COMPA_vect) {
   }
 }
 
-struct Pattern;
-
-template<typename T>
-class EntityCycler {
-private:
-  T* objects;
-  size_t count;
-  size_t index = 0;
-public:
-  EntityCycler(T* objArray, size_t objCount)
-    : objects(objArray), count(objCount) {}
-
-  T& getCurrent() const {
-    return objects[index];
-  }
-  void next() {
-    index = (index + 1) % count;
-  }
-  bool reachedEnd() {
-    return index == count - 1;
-  }
-  size_t getIndex() {
-    return index;
-  }
-  void resetIndex() {
-    index = 0;
-  }
-};
-
 struct Motor {
   const uint8_t pin1;
   const uint8_t pin2;
@@ -134,7 +107,7 @@ struct Motor {
   bool isStopped = true;
   bool canMove = false;
   bool isMoving = false;
-  bool completedPattern = false;
+  bool reachedDestination = false;
   bool printedMoveLogForThisTarget = false;
 
   void init() {
@@ -223,17 +196,71 @@ struct Motor {
   Motor(uint8_t p1, uint8_t p2, uint8_t ID, uint8_t sameBoardMotorID, Adafruit_NeoPixel* ledObj)
     : pin1(p1), pin2(p2), sameBoardMotorID(sameBoardMotorID), ID(ID), led(ledObj) {}
 };
+struct MotorMovementPattern {
+  int destination;  // Duration in milliseconds for forward movement
+  const int minDestination = 150;
+  int origin = MIN_POSITION;
+  
+  int repetitions;
+  size_t index = 0;
+  
+  uint8_t order[MOTOR_COUNT] = { 0, 5, 2, 8, 1, 7, 4, 6, 3 };
+  //radial[MOTOR_COUNT] = { 0, 1, 2, 4, 3, 5, 6, 8, 7 };
 
-struct MotorMovementPattern : public EntityCycler<uint8_t> {
-  int destination;
-  int origin;  //will return here after reaching destination
+  struct Orders {
+    static const uint8_t radial[MOTOR_COUNT];
+    static const uint8_t opposite[MOTOR_COUNT];
+  };
 
-  uint8_t getMotorID() {
-    return EntityCycler::getCurrent();
+  bool isLastMotor(){
+    return index == MOTOR_COUNT-1;
   }
 
-  MotorMovementPattern(uint8_t* arr, int destination = MAX_POSITION, int origin = MIN_POSITION)
-    : EntityCycler<uint8_t>(arr, MOTOR_COUNT), destination(destination), origin(origin) {}
+  bool completedLastRepetition(){
+    return repetitions == 0;
+  }
+
+  uint8_t getMotor(){
+    return order[index];
+  }
+
+  int getDestination(){
+    return destination;
+  }
+  
+  void initializePattern() {
+    destination = 0;
+    repetitions = 1;
+    index = 0;
+  }
+
+  void generateNewPattern() {
+    float r = random(0, 10000) / 10000.0;
+    r = r * r;  // Square it to skew distribution
+    destination = minDestination + (int)(r * (MAX_POSITION - minDestination));
+    repetitions = max(1, (int)(PATTERN_DURATION / (destination * MOTOR_COUNT)));
+    index = 0;
+  }
+
+  void next() {
+    if (isLastMotor()) {
+      repetitions--;
+      Serial.print(repetitions);
+      Serial.println(" repetitions remaining, index back to 0");
+      index = 0;
+    } else {
+      Serial.print("index ");
+      Serial.print(index);
+      Serial.print(" incrementing to ");
+      index++;
+      Serial.println(index);
+    }
+    if (completedLastRepetition()) generateNewPattern();
+  }
+
+  MotorMovementPattern() {
+    initializePattern();
+  }
 };
 
 struct AudioTrack {
@@ -250,7 +277,6 @@ struct AudioTrack {
   unsigned long duration;
   unsigned long playbackStartedTimestamp = 0;
   unsigned long playbackEndedTimestamp = 1;
-  int8_t fade = 0;
   unsigned long lastVolumeUpdate = 0;
   File fileHandle;
   State state = IDLE;
@@ -293,17 +319,8 @@ struct AudioTrack {
       Serial.println(fileName);
       isPlaying = true;
       state = PLAYING;
-      playbackStartedTimestamp = millis();
-      startFadeIn();
+      currentVolume = AUDIO_MAX_VOLUME;
     }
-  }
-
-  void startFadeOut() {
-    fade = state != FAILED ? -1 : 0;
-  }
-
-  void startFadeIn() {
-    fade = state != FAILED ? 1 : 0;
   }
 
   void pause() {
@@ -318,42 +335,19 @@ struct AudioTrack {
   }
 
   void update() {
-    if (state != FAILED) {
-      static unsigned long lastUpdate = 0;
-
-      unsigned long now = millis();
-      if (now - lastUpdate < UPDATE_INTERVAL) {
-        return;
-      }
-      lastUpdate = now;
-
-      if (fade == 1 && currentVolume < AUDIO_MAX_VOLUME) {
-        currentVolume = min(currentVolume + volumeStepSize, (float)AUDIO_MAX_VOLUME);
-        if (currentVolume >= AUDIO_MAX_VOLUME) { fade = 0; }
-      } else if (fade == -1 && currentVolume > AUDIO_MIN_VOLUME) {
-        currentVolume = min(currentVolume - volumeStepSize, (float)AUDIO_MIN_VOLUME);
-        if (currentVolume >= AUDIO_MIN_VOLUME) { fade = 0; }
-      }
-
-      if (state == PLAYING && audioBufferPos >= (BUFFER_SIZE * 3 / 4)) {
-        fillBuffer();
-      }
+    if (state == PLAYING && audioBufferPos >= (BUFFER_SIZE * 3/4)) {
+      fillBuffer();
     }
   }
 
   void fillBuffer() {
     cli();
-
-    SPI.beginTransaction(SPISettings(50000000, MSBFIRST, SPI_MODE0));
     int bytesRead = fileHandle.read(buffer, BUFFER_SIZE);
-    SPI.endTransaction();
-
     if (bytesRead > 0) {
       currentBuffer = buffer;
       audioBufferPos = 0;
       bufferNeedsFill = false;
     } else {
-      // Loop track
       fileHandle.seek(0);
       fillBuffer();
     }
@@ -383,61 +377,10 @@ Motor motor7(9, 8, 7, 6, &led_7);
 
 Motor m[MOTOR_COUNT] = { motor0, motor1, motor2, motor3, motor4, motor5, motor6, motor7, motor8 };
 
-static const uint8_t PATTERN_COUNT = 32;
-uint8_t radial[MOTOR_COUNT] = { 0, 1, 2, 4, 3, 5, 6, 8, 7 };
-uint8_t opposites[MOTOR_COUNT] = { 0, 5, 2, 8, 1, 7, 4, 6, 3 };
-
-MotorMovementPattern& getNextMotorMovementPattern();
-
-MotorMovementPattern retractAll(radial, MIN_POSITION, MIN_POSITION);
-MotorMovementPattern full(radial);
-MotorMovementPattern half(radial, MAX_POSITION/2);
-MotorMovementPattern quarter(opposites, MAX_POSITION/4);
-MotorMovementPattern eighth(opposites, MAX_POSITION/8);
-MotorMovementPattern sixteenth(opposites, MAX_POSITION/16);
-MotorMovementPattern p[PATTERN_COUNT] = { 
-  retractAll, 
-  full, 
-  half,
-  half,
-  quarter,
-  quarter, 
-  quarter, 
-  quarter,
-  eighth, 
-  eighth, 
-  eighth,
-  eighth, 
-  eighth, 
-  eighth, 
-  eighth,
-  eighth,
-  sixteenth, 
-  sixteenth, 
-  sixteenth,
-  sixteenth, 
-  sixteenth, 
-  sixteenth, 
-  sixteenth,
-  sixteenth, 
-  sixteenth, 
-  sixteenth, 
-  sixteenth,
-  sixteenth, 
-  sixteenth, 
-  sixteenth, 
-  sixteenth,
-  sixteenth
-  };
-EntityCycler<MotorMovementPattern> patterns(p, PATTERN_COUNT);
-
+AudioTrack track("onset.raw", 54059);
 Adafruit_MCP4725* AudioTrack::dac = nullptr;
-static const uint8_t AUDIO_COUNT = 2;
-AudioTrack au[AUDIO_COUNT] = {
-  AudioTrack("onset.raw", 54059),
-  AudioTrack("upset.raw", 77089)
-};
-EntityCycler<AudioTrack> tracks(au, AUDIO_COUNT);
+
+MotorMovementPattern pattern;
 
 bool isSameBoardMotorMoving(uint8_t i) {
   uint8_t j = m[i].sameBoardMotorID;
@@ -450,27 +393,6 @@ uint8_t countMotorsMoving() {
   for (uint8_t i = 0; i < MOTOR_COUNT; i++)
     if (m[i].isMoving) count = count + 1;
   return count;
-}
-
-MotorMovementPattern& getNextMotorMovementPattern() {
-
-  if (patterns.getCurrent().reachedEnd()) {
-    patterns.next();
-    if (patterns.getIndex() == 0) {
-      patterns.next();
-    }
-    // Reset the motor index when switching patterns
-    patterns.getCurrent().resetIndex();  // Add this line
-  } else {
-    patterns.getCurrent().next();
-  }
-  
-  Serial.print("Pattern ");
-  Serial.print(patterns.getIndex());
-  Serial.print(" on step ");
-  Serial.println(patterns.getCurrent().getIndex());
-
-  return patterns.getCurrent();
 }
 
 void setup() {
@@ -498,9 +420,8 @@ void setup() {
   }
 
   Serial.println("Pre-loading audio files...");
-  for (int i = 0; i < AUDIO_COUNT; i++) {
-    au[i].preloadFile();
-  }
+  track.preloadFile();
+  track.play();
 
   Serial.println("Initializing timers...");
   setupTimer5();
@@ -513,18 +434,9 @@ void setup() {
 
 void loop() {
 
-  AudioTrack& track = tracks.getCurrent();
-  MotorMovementPattern& mp = patterns.getCurrent();
-
   if (needsDacUpdate) {
     dac.setVoltage(nextDacValue, false);
     needsDacUpdate = false;
-  }
-  if (track.shouldPlay()) {
-    track.play();
-  } else if (track.shouldPause()) {
-    track.pause();
-    tracks.next();
   }
   track.update();
 
@@ -536,13 +448,13 @@ void loop() {
     else if (m[i].reachedTarget() && !m[i].isStopped) {
       m[i].stop();
 
-      if (!m[i].completedPattern) {
-        m[i].setTargetPosition(mp.origin);
-        m[i].completedPattern = true;
-        mp = getNextMotorMovementPattern();
-        uint8_t j = mp.getMotorID();
-        m[j].setTargetPosition(mp.destination);
-        m[j].completedPattern = false;
+      if (!m[i].reachedDestination) {
+        m[i].setTargetPosition(pattern.origin);
+        m[i].reachedDestination = true;
+        pattern.next();
+        uint8_t j = pattern.getMotor();
+        m[j].setTargetPosition(pattern.getDestination());
+        m[j].reachedDestination = false;
       }
     }
   }
