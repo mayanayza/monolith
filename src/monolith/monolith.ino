@@ -159,6 +159,8 @@ struct Motor {
 
     int incrementalMotorPosition = now - lastStateChange;
     int nextPosition = position + direction * incrementalMotorPosition;
+    if (direction == 1) nextPosition = min(nextPosition, (int)targetPosition);
+    else nextPosition = max(nextPosition, (int)targetPosition);
     position = constrain(nextPosition, MIN_POSITION, MAX_POSITION);
 
     lastStateChange = now;
