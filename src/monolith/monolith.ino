@@ -22,6 +22,12 @@
 #define BUFFER_SIZE 2048
 #define UPDATE_INTERVAL 1  //ms between updates
 
+//Diagnostics
+#define SERIAL_BAUD 115200
+#define HEARTBEAT_INTERVAL 5000  //ms between status dumps
+#define STALL_TIMEOUT 10000      //ms without a pattern advance before reporting a stall
+unsigned long lastPatternAdvance = 0;
+
 // Audio buffer and timer settings
 volatile uint32_t isrCount = 0;
 volatile uint16_t nextDacValue = 2048;
@@ -73,6 +79,10 @@ void setupTimer4() {
 
 ISR(TIMER4_COMPA_vect) {
   if (!isPlaying || currentBuffer == nullptr) {
+    return;
+  }
+  // Hold the last sample if loop() hasn't refilled in time, instead of reading past the buffer
+  if (audioBufferPos >= BUFFER_SIZE) {
     return;
   }
 
@@ -245,19 +255,20 @@ struct MotorMovementPattern {
   }
 
   void next() {
+    lastPatternAdvance = millis();
     if (isLastMotor()) {
       repetitions--;
-      Serial.print(repetitions);
-      Serial.println(" repetitions remaining, index back to 0");
       index = 0;
     } else {
-      Serial.print("index ");
-      Serial.print(index);
-      Serial.print(" incrementing to ");
       index++;
-      Serial.println(index);
     }
     if (completedLastRepetition()) generateNewPattern();
+    Serial.print("next idx=");
+    Serial.print(index);
+    Serial.print(" reps=");
+    Serial.print(repetitions);
+    Serial.print(" dest=");
+    Serial.println(destination);
   }
 
   MotorMovementPattern() {
@@ -345,15 +356,23 @@ struct AudioTrack {
   void fillBuffer() {
     cli();
     int bytesRead = fileHandle.read(buffer, BUFFER_SIZE);
+    if (bytesRead <= 0) {
+      // End of file: loop back to the start and retry once
+      fileHandle.seek(0);
+      bytesRead = fileHandle.read(buffer, BUFFER_SIZE);
+    }
     if (bytesRead > 0) {
       currentBuffer = buffer;
       audioBufferPos = 0;
       bufferNeedsFill = false;
-    } else {
-      fileHandle.seek(0);
-      fillBuffer();
     }
     sei();
+
+    if (bytesRead <= 0) {
+      Serial.println("AUDIO READ FAILED");
+      pause();
+      state = FAILED;
+    }
   }
 };
 
@@ -397,10 +416,93 @@ uint8_t countMotorsMoving() {
   return count;
 }
 
+// Hand the destination to the next motor in the pattern. A motor that hasn't made it home yet
+// can already sit at that destination; it would never move, never stop, and so never advance
+// the pattern. Send it home instead and move on to the following motor.
+void advancePattern() {
+  for (uint8_t tries = 0; tries < MOTOR_COUNT; tries++) {
+    pattern.next();
+    uint8_t j = pattern.getMotor();
+    int destination = pattern.getDestination();
+    if (destination != pattern.origin && m[j].position == destination) {
+      m[j].print("Already at destination, skipping");
+      m[j].setTargetPosition(pattern.origin);
+      m[j].reachedDestination = true;
+      continue;
+    }
+    m[j].setTargetPosition(destination);
+    m[j].reachedDestination = false;
+    return;
+  }
+  Serial.println("advancePattern: every motor already at destination");
+}
+
+extern int __heap_start, *__brkval;
+int freeRam() {
+  int v;
+  return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
+}
+
+void printResetCause(uint8_t flags) {
+  Serial.print("RESET:");
+  if (flags & (1 << PORF)) Serial.print(" power-on");
+  if (flags & (1 << EXTRF)) Serial.print(" external");
+  if (flags & (1 << BORF)) Serial.print(" BROWNOUT");
+  if (flags & (1 << WDRF)) Serial.print(" WATCHDOG");
+  if (flags & (1 << JTRF)) Serial.print(" jtag");
+  if (flags == 0) Serial.print(" unknown (cleared by bootloader)");
+  Serial.println();
+}
+
+// One line: timing, pattern state, then each motor as ID:pos/target followed by
+// flags c=canMove m=isMoving s=isStopped d=reachedDestination (uppercase = true)
+void printStatus(const char* label, unsigned long loops, unsigned long maxLoopMs) {
+  unsigned long now = millis();
+  Serial.print(label);
+  Serial.print(" t=");
+  Serial.print(now);
+  Serial.print(" loops=");
+  Serial.print(loops);
+  Serial.print(" maxLoopMs=");
+  Serial.print(maxLoopMs);
+  Serial.print(" sinceNext=");
+  Serial.print(now - lastPatternAdvance);
+  Serial.print(" idx=");
+  Serial.print(pattern.index);
+  Serial.print("(m");
+  Serial.print(pattern.getMotor());
+  Serial.print(") reps=");
+  Serial.print(pattern.repetitions);
+  Serial.print(" dest=");
+  Serial.print(pattern.destination);
+  Serial.print(" ram=");
+  Serial.print(freeRam());
+  Serial.print(" audio=");
+  Serial.print(track.state);
+  for (uint8_t i = 0; i < MOTOR_COUNT; i++) {
+    Serial.print(" ");
+    Serial.print(i);
+    Serial.print(":");
+    Serial.print(m[i].position);
+    Serial.print("/");
+    Serial.print(m[i].targetPosition);
+    Serial.print(m[i].canMove ? 'C' : 'c');
+    Serial.print(m[i].isMoving ? 'M' : 'm');
+    Serial.print(m[i].isStopped ? 'S' : 's');
+    Serial.print(m[i].reachedDestination ? 'D' : 'd');
+  }
+  Serial.println();
+}
+
 void setup() {
-  Serial.begin(9600);
+  uint8_t resetFlags = MCUSR;
+  MCUSR = 0;
+
+  Serial.begin(SERIAL_BAUD);
+  printResetCause(resetFlags);
   Wire.begin();
   Wire.setClock(400000);
+  Wire.setWireTimeout(3000, true);  // a glitched I2C bus would otherwise hang loop() forever
   SPI.begin();
   SPI.beginTransaction(SPISettings(50000000, MSBFIRST, SPI_MODE0));
 
@@ -431,10 +533,16 @@ void setup() {
 
   sei();
 
+  lastPatternAdvance = millis();
   Serial.println("Setup complete");
 }
 
 void loop() {
+  static unsigned long loops = 0;
+  static unsigned long maxLoopMs = 0;
+  static unsigned long lastHeartbeat = 0;
+  static bool stallReported = false;
+  unsigned long loopStart = millis();
 
   if (needsDacUpdate) {
     dac.setVoltage(nextDacValue, false);
@@ -444,7 +552,9 @@ void loop() {
 
   for (uint8_t i = 0; i < MOTOR_COUNT; i++) {
 
-    if (!isSameBoardMotorMoving(i) && countMotorsMoving() < MAX_MOTORS_MOVING && !m[i].canMove) m[i].allowMove();
+    // Only grant a slot to a motor with somewhere to go. An idle motor holding canMove would
+    // start its next move without checking the limit, starving motors waiting to return home.
+    if (!m[i].reachedTarget() && !isSameBoardMotorMoving(i) && countMotorsMoving() < MAX_MOTORS_MOVING && !m[i].canMove) m[i].allowMove();
 
     if (!m[i].reachedTarget() && m[i].canMove) m[i].move();
     else if (m[i].reachedTarget() && !m[i].isStopped) {
@@ -453,11 +563,28 @@ void loop() {
       if (!m[i].reachedDestination) {
         m[i].setTargetPosition(pattern.origin);
         m[i].reachedDestination = true;
-        pattern.next();
-        uint8_t j = pattern.getMotor();
-        m[j].setTargetPosition(pattern.getDestination());
-        m[j].reachedDestination = false;
+        advancePattern();
       }
     }
+  }
+
+  unsigned long now = millis();
+  loops++;
+  maxLoopMs = max(maxLoopMs, now - loopStart);
+
+  if (now - lastPatternAdvance > STALL_TIMEOUT) {
+    if (!stallReported) {
+      printStatus("STALL", loops, maxLoopMs);
+      stallReported = true;
+    }
+  } else {
+    stallReported = false;
+  }
+
+  if (now - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    printStatus("HB", loops, maxLoopMs);
+    lastHeartbeat = now;
+    loops = 0;
+    maxLoopMs = 0;
   }
 }
